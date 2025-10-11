@@ -1,126 +1,70 @@
-<!doctype html>
-<html lang="ja">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hobby Chat</title>
-<style>
-:root{ --safe-bottom: env(safe-area-inset-bottom, 0px); }
-*{ box-sizing:border-box }
-html,body{ height:100% }
-body{
-  font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
-  margin:0; display:flex; flex-direction:column; min-height:100dvh; background:#fafafa;
-}
-header{
-  display:flex; align-items:center; gap:8px; padding:10px 12px;
-  border-bottom:1px solid #e5e5e5; background:#fff; position:sticky; top:0; z-index:10;
-}
-header h1{ font-size:16px; margin:0 }
-.chip{ font-size:12px; padding:2px 8px; border:1px solid #ddd; border-radius:999px }
-#notifBtn{
-  margin-left:auto; font-size:12px; padding:4px 8px; border:1px solid #ddd; border-radius:6px; background:#fff; cursor:pointer;
-}
-#log{ flex:1; overflow:auto; padding:12px; }
-.date-separator{
-  text-align:center; margin:16px 0; font-size:13px; color:#666;
-}
-#bar{
-  position:sticky; bottom:0;
-  display:flex; gap:8px; padding:8px 8px calc(8px + var(--safe-bottom));
-  border-top:1px solid #e5e5e5; background:#fff; z-index:10;
-  box-shadow:0 -2px 8px rgba(0,0,0,.04);
-}
-input,button{ font-size:16px }
-#name{ width:30%; min-width:120px }
-#text{ flex:1; min-width:0 }
-#send{ padding:8px 12px }
-.bubble{
-  margin:6px 0; padding:8px 10px; border-radius:10px; background:#f1f3f5; max-width:90%;
-  display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
-}
-.me{ background:#e8f0ff; margin-left:auto }
-.msg-text{ white-space:pre-wrap; word-break:break-word }
-.time{ font-size:11px; color:#666; margin-left:auto; opacity:.9; }
-.sys{ color:#666; font-size:12px; margin:8px 0 }
-@media (max-width:480px){ #name{ width:40% } #send{ padding:8px } }
-</style>
-
-<header>
-  <h1>Hobby Chat</h1><span class="chip">MVP</span>
-  <button id="notifBtn">🔔 通知OFF</button>
-</header>
-<div id="log"></div>
-<div id="bar">
-  <input id="name" placeholder="ニックネーム">
-  <input id="text" placeholder="メッセージを入力">
-  <button id="send">送信</button>
-</div>
-
 <script src="/socket.io/socket.io.js" crossorigin="anonymous"></script>
 <script>
 const socket = io();
-const log = document.getElementById('log');
+const log   = document.getElementById('log');
 const nameI = document.getElementById('name');
 const textI = document.getElementById('text');
 const sendB = document.getElementById('send');
-const notifB = document.getElementById('notifBtn');
+const notifB= document.getElementById('notifBtn');
 
-// ニックネーム保存
+// ニックネーム永続化
 nameI.value = localStorage.getItem('nickname') || '';
 nameI.addEventListener('input', () => localStorage.setItem('nickname', nameI.value.trim()));
 
-// === 相対時間関数 ===
+// 相対時間
 function relativeTime(dateStr){
   const now = new Date();
   const d = new Date(dateStr);
-  const diff = (now - d) / 1000; // 秒
-  if(diff < 60) return "たった今";
-  if(diff < 3600) return Math.floor(diff/60) + "分前";
-  if(diff < 86400) return Math.floor(diff/3600) + "時間前";
-  if(diff < 172800) return "昨日";
-  if(diff < 604800) return Math.floor(diff/86400) + "日前";
+  const diff = (now - d) / 1000;
+  if (diff < 60) return "たった今";
+  if (diff < 3600) return Math.floor(diff/60) + "分前";
+  if (diff < 86400) return Math.floor(diff/3600) + "時間前";
+  if (diff < 172800) return "昨日";
+  if (diff < 604800) return Math.floor(diff/86400) + "日前";
   return d.toLocaleDateString();
 }
 
-// === 日付セパレータ管理 ===
-let lastDate = null;
-function insertDateSeparatorIfNeeded(dateStr){
+// セパレータ管理（最新が上＝prepend運用に最適化）
+let topDateKey = null; // 直近で「先頭にある日のキー」
+function ensureSeparatorFor(dateStr){
   const d = new Date(dateStr);
-  const dateKey = d.toISOString().split("T")[0];
-  if(lastDate !== dateKey){
-    const label = new Date(dateKey);
-    const today = new Date();
-    const diffDays = Math.floor((today - label)/(1000*60*60*24));
-    const labelText = diffDays===0 ? "今日" : diffDays===1 ? "昨日" : label.toLocaleDateString();
-    const sep = document.createElement('div');
-    sep.className = 'date-separator';
-    sep.textContent = labelText;
-    log.prepend(sep);
-    lastDate = dateKey;
-  }
+  const dateKey = d.toISOString().split('T')[0];
+  if (topDateKey === dateKey) return;
+
+  const labelDate = new Date(dateKey);
+  const today = new Date();
+  const diffDays = Math.floor((today - labelDate)/(1000*60*60*24));
+  const label = diffDays===0 ? "今日" : diffDays===1 ? "昨日" : labelDate.toLocaleDateString();
+
+  const sep = document.createElement('div');
+  sep.className = 'date-separator';
+  sep.textContent = label;
+  // セパレータはメッセージの“さらに上”に来る必要があるため、最後にprependする
+  log.prepend(sep);
+  topDateKey = dateKey;
 }
 
-// === 通知 ===
+// 通知
 function updateNotifButton(){
-  notifB.textContent = (Notification?.permission === 'granted') ? '🔔 通知ON' : '🔕 通知OFF';
+  notifB && (notifB.textContent = (Notification?.permission === 'granted') ? '🔔 通知ON' : '🔕 通知OFF');
 }
-notifB.onclick = async ()=>{
-  if(!('Notification' in window)) return alert('通知に非対応です');
-  if(Notification.permission !== 'granted') await Notification.requestPermission();
+notifB && (notifB.onclick = async () => {
+  if (!('Notification' in window)) return alert('通知に非対応です');
+  if (Notification.permission !== 'granted') await Notification.requestPermission();
   updateNotifButton();
-};
+});
 updateNotifButton();
 
-// === 描画 ===
+// 描画 & 重複対策
 const seen = new Set();
-function keyOf(m){ return m.id ? `id:${m.id}` : `${m.name}:${m.text}:${m.created_at}`; }
+const keyOf = (m) => m.id ? `id:${m.id}` : `${m.name}:${m.text}:${m.created_at || ''}`;
 
 function addMsg(m, me=false){
-  const key = keyOf(m);
-  if(seen.has(key)) return;
-  seen.add(key);
-  insertDateSeparatorIfNeeded(m.created_at);
+  const k = keyOf(m);
+  if (seen.has(k)) return;
+  seen.add(k);
 
+  // 1) 先にメッセージをprepend
   const wrap = document.createElement('div');
   wrap.className = 'bubble' + (me ? ' me' : '');
   const body = document.createElement('div');
@@ -131,9 +75,11 @@ function addMsg(m, me=false){
   time.textContent = relativeTime(m.created_at);
   wrap.append(body, time);
   log.prepend(wrap);
+
+  // 2) その“さらに上”に日付セパレータを必要に応じて配置
+  ensureSeparatorFor(m.created_at);
 }
 
-// === システムメッセージ ===
 function addSys(t){
   const p = document.createElement('div');
   p.className = 'sys';
@@ -141,34 +87,36 @@ function addSys(t){
   log.prepend(p);
 }
 
-// === 通知トリガ ===
-function maybeNotify({name, text}){
-  if(name === nameI.value.trim()) return;
-  if(document.hidden && Notification?.permission === 'granted'){
-    new Notification(`${name}`, { body: text });
-    if(navigator.vibrate) navigator.vibrate(30);
+// 通知
+function maybeNotify(m){
+  const me = m.name === nameI.value.trim();
+  if (me) return;
+  if (document.hidden && Notification?.permission === 'granted') {
+    new Notification(`${m.name}`, { body: m.text, tag: 'hobby-chat' });
+    if (navigator.vibrate) navigator.vibrate(30);
   }
 }
 
-// === ソケット処理 ===
-socket.on('connect', () => { log.replaceChildren(); seen.clear(); lastDate = null; });
+// ソケット
+socket.on('connect', () => { log.replaceChildren(); seen.clear(); topDateKey = null; });
 socket.on('sys', addSys);
-socket.on('msg', (m)=>{ addMsg(m, m.name===nameI.value.trim()); maybeNotify(m); });
+socket.on('msg', (m) => {
+  const me = (m.name === nameI.value.trim());
+  addMsg(m, me);
+  maybeNotify(m);
+});
 
-// === 送信処理 ===
+// 送信（※ 楽観描画せず、サーバから戻った1件のみ表示）
 function joinIfNeeded(){ const n = nameI.value.trim(); if(n) socket.emit('join', n); }
-sendB.onclick = ()=>{
+sendB.onclick = () => {
   joinIfNeeded();
   const t = textI.value.trim();
   if(!t) return;
-  const msg = { name: nameI.value.trim()||'guest', text: t, created_at: new Date().toISOString() };
   socket.emit('msg', t);
-  addMsg(msg, true);
-  textI.value='';
+  textI.value = '';
 };
-textI.addEventListener('keydown', e=>{ if(e.key==='Enter') sendB.click(); });
+textI.addEventListener('keydown', e => { if(e.key==='Enter') sendB.click(); });
 
-// === 入力欄の隠れ対策 ===
-textI.addEventListener('focus', ()=> setTimeout(()=> textI.scrollIntoView({block:'nearest'}),50));
+// モバイル対策
+textI.addEventListener('focus', () => setTimeout(() => textI.scrollIntoView({block:'nearest'}), 50));
 </script>
-</html>
