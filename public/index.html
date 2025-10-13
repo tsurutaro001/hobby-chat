@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Hobby Chat</title>
 <style>
 :root{ --safe-bottom: env(safe-area-inset-bottom, 0px); }
@@ -10,6 +10,7 @@ html,body{ height:100% }
 body{
   font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
   margin:0; display:flex; flex-direction:column; min-height:100dvh; background:#fafafa;
+  overscroll-behavior-y: contain;
 }
 header{
   display:flex; align-items:center; gap:8px; padding:10px 12px;
@@ -22,7 +23,7 @@ header h1{ font-size:16px; margin:0; cursor:pointer; user-select:none; }
   font-size:12px; padding:4px 8px; border:1px solid #ddd; border-radius:6px; background:#fff; cursor:pointer;
 }
 
-#log{ flex:1; overflow:auto; padding:12px; }
+#log{ flex:1; overflow:auto; padding:12px; -webkit-overflow-scrolling: touch; }
 .date-separator{
   text-align:center; margin:16px 0; font-size:13px; color:#666;
 }
@@ -38,52 +39,53 @@ input,button,select{ font-size:16px }
 #nameSel{ width:30%; min-width:160px }
 #text{ flex:1; min-width:0 }
 #send{ padding:8px 12px }
+#photo{ display:none } /* 隠しファイル入力 */
+#photoBtn{ padding:8px 10px; border:1px solid #ddd; border-radius:6px; background:#fff; }
 
 .bubble{
-  margin:6px 0; padding:8px 10px; border-radius:10px; background:#f1f3f5; max-width:90%;
-  display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+  margin:6px 0; padding:8px 10px; border-radius:10px; background:#f1f3f5; max-width:92%;
+  display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap;
 }
 .me{ background:#e8f0ff; margin-left:auto }
 .msg-text{ white-space:pre-wrap; word-break:break-word }
 .time{ font-size:11px; color:#666; margin-left:auto; opacity:.9; }
 .sys{ color:#666; font-size:12px; margin:8px 0 }
 
-mark {
-  background: #ffe56a;
-  padding: 0 2px;
-  border-radius: 2px;
+.read-badge{
+  font-size:11px; color:#4a5568; background:#e2e8f0; border-radius:999px; padding:2px 8px; margin-left:6px;
 }
+
+mark { background: #ffe56a; padding: 0 2px; border-radius: 2px; }
 
 /* メンション候補ポップアップ */
 .mention-box{
-  position:absolute;
-  bottom: calc(52px + var(--safe-bottom)); /* 入力欄の少し上に重ねる */
-  left: 8px;
-  right: 8px;
-  display:none;
-  background:#fff;
-  border:1px solid #e5e5e5;
-  border-radius:8px;
-  box-shadow:0 8px 24px rgba(0,0,0,.08);
-  padding:6px;
-  z-index: 20;
+  position:absolute; left: 8px; right: 8px;
+  bottom: calc(52px + var(--safe-bottom));
+  display:none; background:#fff; border:1px solid #e5e5e5; border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.08); padding:6px; z-index: 20;
 }
 .mention-list{ display:flex; flex-wrap:wrap; gap:6px; }
 .mention-item{
   padding:6px 10px; border:1px solid #ddd; border-radius:999px; cursor:pointer; background:#fafafa;
 }
-.mention-item.active{
-  outline: 2px solid #7aa7ff;
-  background:#eef3ff;
+.mention-item.active{ outline: 2px solid #7aa7ff; background:#eef3ff; }
+
+img.chat-photo{
+  max-width: min(60vw, 420px);
+  height: auto;
+  border-radius: 10px;
+  display:block;
 }
 
-@media (max-width:480px){ #nameSel{ width:45% } #send{ padding:8px } }
+@media (max-width:480px){
+  #nameSel{ width:45% } #send{ padding:8px }
+}
 </style>
 
 <header>
   <h1 id="title">Hobby Chat</h1><span class="chip">MVP</span>
   <div class="header-actions">
-    <button id="notifBtn">🔕 通知OFF</button>
+    <button id="notifBtn" aria-live="polite">🔕 通知OFF</button>
     <button id="clearBtn" title="チャット履歴をすべて削除">🧹 履歴削除</button>
   </div>
 </header>
@@ -91,7 +93,7 @@ mark {
 <div id="log"></div>
 
 <div id="bar">
-  <!-- 固定メンバーのプルダウン -->
+  <!-- 固定メンバー -->
   <select id="nameSel" title="メンバーを選択">
     <option value="">（メンバーを選択）</option>
     <option value="なおき">なおき</option>
@@ -99,44 +101,56 @@ mark {
     <option value="さな">さな</option>
     <option value="りと">りと</option>
   </select>
-  <input id="text" placeholder="メッセージを入力">
+
+  <input id="text" placeholder="メッセージを入力" autocomplete="off" inputmode="text">
+  <button id="photoBtn" title="写真を送る">📷</button>
+  <input id="photo" type="file" accept="image/*">
+
   <button id="send">送信</button>
 </div>
 
-<!-- メンション候補ポップアップ -->
-<div id="mentionBox" class="mention-box">
-  <div class="mention-list" id="mentionList"></div>
-</div>
+<!-- メンション候補 -->
+<div id="mentionBox" class="mention-box"><div class="mention-list" id="mentionList"></div></div>
 
 <script src="/socket.io/socket.io.js" crossorigin="anonymous"></script>
 <script>
 /* ===== 定数・参照 ===== */
 const MEMBERS = ['なおき', 'りさ', 'さな', 'りと'];
-
 const socket  = io();
 const log     = document.getElementById('log');
 const nameSel = document.getElementById('nameSel');
 const textI   = document.getElementById('text');
+const photoI  = document.getElementById('photo');
+const photoB  = document.getElementById('photoBtn');
 const sendB   = document.getElementById('send');
 const notifB  = document.getElementById('notifBtn');
 const clearB  = document.getElementById('clearBtn');
 const titleEl = document.getElementById('title');
-
 const mentionBox  = document.getElementById('mentionBox');
 const mentionList = document.getElementById('mentionList');
 
-/* ===== ユーティリティ ===== */
-function isNearBottom(elem, threshold = 40) {
-  return elem.scrollTop + elem.clientHeight >= elem.scrollHeight - threshold;
+/* ===== スマホ最適化：キーボード表示時の持ち上げ（iOS VisualViewport対応） ===== */
+if (window.visualViewport) {
+  const onVV = () => {
+    const vh = window.visualViewport.height;
+    document.documentElement.style.setProperty('--vh', vh + 'px');
+  };
+  window.visualViewport.addEventListener('resize', onVV);
+  onVV();
 }
+textI.addEventListener('focus', () => setTimeout(() => textI.scrollIntoView({block:'nearest'}), 30));
+
+/* ===== 便利関数 ===== */
+function isNearBottom(elem, th = 40) { return elem.scrollTop + elem.clientHeight >= elem.scrollHeight - th; }
 function scrollToBottom(elem) { elem.scrollTop = elem.scrollHeight; }
 function isMe(name) { return name === (nameSel.value || ''); }
 function escapeHTML(s){
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-          .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(s)
+   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+   .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-/* ===== タイトルクリックでリロード ===== */
+/* ===== タイトルタップでリロード ===== */
 titleEl.addEventListener('click', () => location.reload());
 
 /* ===== ニックネーム保存＆自動join ===== */
@@ -166,12 +180,10 @@ function ensureSeparatorForAppend(dateStr){
   const d = new Date(dateStr);
   const dateKey = d.toISOString().split('T')[0];
   if (lastDateKey === dateKey) return;
-
   const labelDate = new Date(dateKey);
   const today = new Date();
   const diffDays = Math.floor((today - labelDate)/(1000*60*60*24));
   const label = diffDays===0 ? "今日" : diffDays===1 ? "昨日" : labelDate.toLocaleDateString();
-
   const sep = document.createElement('div');
   sep.className = 'date-separator';
   sep.textContent = label;
@@ -179,15 +191,27 @@ function ensureSeparatorForAppend(dateStr){
   lastDateKey = dateKey;
 }
 
-/* ===== 通知ON/OFF（アプリ内トグル + 権限） ===== */
+/* ===== 通知（iPhone 16 対応：未対応なら明示） ===== */
 let notifEnabled = JSON.parse(localStorage.getItem('notifEnabled') ?? 'true'); // 既定ON
+function supportsNotification(){
+  return (typeof Notification !== 'undefined') && typeof Notification.requestPermission === 'function';
+}
 function updateNotifButton(){
-  const perm = (typeof Notification !== 'undefined') ? Notification.permission : 'denied';
+  if (!supportsNotification()) {
+    notifB.textContent = '🚫 通知非対応';
+    notifB.disabled = true;
+    notifB.title = 'このブラウザでは通知APIが使えません（iOSはPWAインストールで有効になる場合があります）';
+    return;
+  }
+  const perm = Notification.permission;
   const label = (perm === 'granted' && notifEnabled) ? '🔔 通知ON' : '🔕 通知OFF';
   notifB.textContent = label;
 }
 notifB.onclick = async () => {
-  if (typeof Notification === 'undefined') return alert('このブラウザは通知に対応していません');
+  if (!supportsNotification()) {
+    alert('このブラウザでは通知が使えません。iPhoneの場合はホーム画面に追加（PWA化）すると通知許可できる場合があります。');
+    return;
+  }
   const perm = Notification.permission;
   if (perm !== 'granted') {
     const p = await Notification.requestPermission();
@@ -203,29 +227,42 @@ updateNotifButton();
 
 function maybeNotify({name, text}){
   if (isMe(name)) return;
-  if (typeof Notification === 'undefined') return;
-  if (!notifEnabled || Notification.permission !== 'granted') return;
-
+  if (!supportsNotification() || !notifEnabled || Notification.permission !== 'granted') return;
   const my = nameSel.value;
-  const mentioned = text.includes(`@${my}`);
+  const mentioned = text && text.includes(`@${my}`);
   const notInFront = document.hidden || !document.hasFocus();
-
-  // 自分宛メンションはフォーカス中でも通知／通常は非表示時のみ
-  if (!mentioned && !notInFront) return;
-
+  if (!mentioned && !notInFront) return; // 自分宛以外は非表示時のみ
   const title = mentioned ? `📣 あなた宛て (${name})` : `${name}`;
-  new Notification(title, { body: text, tag: 'hobby-chat' });
+  new Notification(title, { body: text || '写真が送信されました', tag: 'hobby-chat' });
   if (navigator.vibrate) navigator.vibrate(mentioned ? 100 : 30);
 }
 
-/* ===== 重複防止 ===== */
+/* ===== 既読管理（全員の last_message_id を集計） ===== */
+const lastReads = new Map(); // name -> last_message_id
+function updateReadBadgeFor(messageId, bubbleEl, sender){
+  // 送信者を除いた「読んだ人数」
+  let count = 0;
+  for (const m of MEMBERS) {
+    if (m === sender) continue;
+    const v = lastReads.get(m) || 0;
+    if (v >= messageId) count++;
+  }
+  let badge = bubbleEl.querySelector('.read-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'read-badge';
+    bubbleEl.appendChild(badge);
+  }
+  badge.textContent = count >= (MEMBERS.length - 1) ? '既読 全員' : `既読 ${count}`;
+}
+
+/* ===== 重複防止／ID管理 ===== */
 const seen = new Set();
 const keyOf = (m) => m.id ? `id:${m.id}` : `${m.name}:${m.text}:${m.created_at || ''}`;
 
-/* ===== メンション強調（安全にHTML化） ===== */
+/* ===== テキスト整形（メンション強調 & 画像表示） ===== */
 function renderTextWithMentions(raw){
-  let esc = escapeHTML(raw); // 全文エスケープ
-  // 固定4名を <mark> で強調
+  let esc = escapeHTML(raw);
   esc = esc.replace(/@(?:なおき|りさ|さな|りと)/g, (mt) => `<mark>${mt}</mark>`);
   return esc;
 }
@@ -240,10 +277,24 @@ function addMsg(m, me=false){
 
   const wrap = document.createElement('div');
   wrap.className = 'bubble' + (me ? ' me' : '');
+  wrap.dataset.id = m.id;
+  wrap.dataset.sender = m.name;
 
   const body = document.createElement('div');
   body.className = 'msg-text';
-  body.innerHTML = `${escapeHTML(m.name)}: ${renderTextWithMentions(m.text)}`;
+
+  if (m.image_base64) {
+    // 画像メッセージ
+    const img = document.createElement('img');
+    img.className = 'chat-photo';
+    img.alt = 'photo';
+    img.src = m.image_base64;
+    body.innerHTML = `${escapeHTML(m.name)}:`;
+    body.appendChild(document.createElement('br'));
+    body.appendChild(img);
+  } else {
+    body.innerHTML = `${escapeHTML(m.name)}: ${renderTextWithMentions(m.text)}`;
+  }
 
   const time = document.createElement('span');
   time.className = 'time';
@@ -251,6 +302,9 @@ function addMsg(m, me=false){
 
   wrap.append(body, time);
   log.append(wrap);
+
+  // 既読バッジ初期表示
+  updateReadBadgeFor(m.id, wrap, m.name);
 }
 
 /* ===== システムメッセージ ===== */
@@ -261,19 +315,37 @@ function addSys(t){
   log.append(p);
 }
 
-/* ===== 受信（下付近にいる時だけ自動スクロール） ===== */
+/* ===== ソケット受信 ===== */
 socket.on('connect', () => { log.replaceChildren(); seen.clear(); lastDateKey = null; });
 socket.on('sys', addSys);
+
+socket.on('reads_bulk', (rows) => {
+  rows.forEach(r => lastReads.set(r.name, r.last_message_id || 0));
+});
+socket.on('reads', ({name, last_message_id}) => {
+  lastReads.set(name, last_message_id || 0);
+  // 最新の数件だけ更新で十分だが、簡易に全更新
+  document.querySelectorAll('.bubble').forEach(el => {
+    const id = Number(el.dataset.id);
+    const sender = el.dataset.sender;
+    if (id) updateReadBadgeFor(id, el, sender);
+  });
+});
+
 socket.on('msg', (m) => {
   const auto = isNearBottom(log);
   const me = isMe(m.name);
   addMsg(m, me);
   if (auto) scrollToBottom(log);
   maybeNotify(m);
+  // 表示したら既読を進める（自分のみ）
+  const lastId = Number(m.id) || 0;
+  if (isNearBottom(log) && nameSel.value) socket.emit('read_upto', lastId);
 });
 
-/* ===== 送信（サーバ戻りのみ描画） ===== */
+/* ===== 送信 ===== */
 function joinIfNeeded(){ if (nameSel.value) socket.emit('join', nameSel.value); }
+
 sendB.onclick = () => {
   if (!nameSel.value) return alert('メンバーを選択してください');
   joinIfNeeded();
@@ -284,13 +356,10 @@ sendB.onclick = () => {
   textI.value = '';
   if (auto) scrollToBottom(log);
 };
-textI.addEventListener('keydown', e => { 
+
+textI.addEventListener('keydown', e => {
   if(e.key==='Enter'){
-    if (mentionBox.style.display === 'block') {
-      e.preventDefault();
-      applyActiveMention();
-      return;
-    }
+    if (mentionBox.style.display === 'block') { e.preventDefault(); applyActiveMention(); return; }
     sendB.click();
   } else if (e.key === 'Tab' && mentionBox.style.display === 'block') {
     e.preventDefault(); applyActiveMention();
@@ -300,9 +369,42 @@ textI.addEventListener('keydown', e => {
     e.preventDefault(); moveActiveMention(-1);
   }
 });
-textI.addEventListener('focus', () => setTimeout(() => textI.scrollIntoView({block:'nearest'}), 50));
 
-/* ===== 履歴削除（管理トークン入力に対応） ===== */
+// 入力欄フォーカス時も最下部へ（スマホで隠れにくく）
+textI.addEventListener('focus', () => setTimeout(() => scrollToBottom(log), 60));
+
+/* ===== 画像送信 ===== */
+photoB.onclick = () => photoI.click();
+photoI.onchange = async () => {
+  const f = photoI.files?.[0];
+  if (!f) return;
+  if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type)) { alert('PNG/JPEG/GIF/WebPのみ対応'); photoI.value=''; return; }
+  if (f.size > 700*1024) { alert('画像は約700KBまでです'); photoI.value=''; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataURL = reader.result; // data:image/...;base64,...
+    socket.emit('upload_image', { dataURL });
+    photoI.value = '';
+  };
+  reader.onerror = () => { alert('画像の読み込みに失敗しました'); };
+  reader.readAsDataURL(f);
+};
+
+/* ===== 既読：画面が最下部なら最新IDで read_upto 送信 ===== */
+const throttle = (fn, ms=400) => { let t=0; return (...a)=>{const n=Date.now(); if(n-t>ms){t=n; fn(...a);} }; };
+const trySendRead = throttle(() => {
+  if (!nameSel.value) return;
+  if (!isNearBottom(log)) return;
+  const last = [...document.querySelectorAll('.bubble')].pop();
+  if (!last) return;
+  const id = Number(last.dataset.id);
+  if (id) socket.emit('read_upto', id);
+}, 500);
+
+log.addEventListener('scroll', trySendRead);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) trySendRead(); });
+
+/* ===== 履歴削除 ===== */
 clearB.onclick = () => {
   if (!nameSel.value) return alert('メンバーを選択してください');
   if (!confirm('本当に全履歴を削除しますか？（取り消せません）')) return;
@@ -310,28 +412,23 @@ clearB.onclick = () => {
   socket.emit('clear', { token: token || '' });
 };
 socket.on('cleared', () => {
-  log.replaceChildren();
-  seen.clear();
-  lastDateKey = null;
+  log.replaceChildren(); seen.clear(); lastDateKey = null;
   alert('チャット履歴を削除しました');
 });
 
-/* ===== メンション補完（@入力で候補表示） ===== */
+/* ===== メンション補完 ===== */
 let activeIdx = -1;
-
 function findMentionToken(){
-  // キャレット直前の「@xxxxx」を抽出（行頭/空白から始まる想定）
   const pos = textI.selectionStart;
   const val = textI.value;
   const left = val.slice(0, pos);
   const m = left.match(/(^|\s)@([^\s@]{0,20})$/);
   if(!m) return null;
-  const prefix = m[2];               // @ の後ろの入力途中
-  const start = pos - prefix.length; // prefix 開始位置
-  const atPos = start - 1;           // @ の位置
+  const prefix = m[2];
+  const start = pos - prefix.length;
+  const atPos = start - 1;
   return { atPos, start, end: pos, prefix };
 }
-
 function showMentionBox(items){
   mentionList.innerHTML = '';
   items.forEach((name, i) => {
@@ -345,25 +442,17 @@ function showMentionBox(items){
   activeIdx = items.length ? 0 : -1;
   mentionBox.style.display = items.length ? 'block' : 'none';
 }
-function hideMentionBox(){
-  mentionBox.style.display = 'none';
-  activeIdx = -1;
-}
-
+function hideMentionBox(){ mentionBox.style.display = 'none'; activeIdx = -1; }
 function applyMention(name){
-  const tok = findMentionToken();
-  if(!tok) return hideMentionBox();
+  const tok = findMentionToken(); if(!tok) return hideMentionBox();
   const val = textI.value;
-  // @prefix を @name + スペース で置換
   const before = val.slice(0, tok.atPos);
   const after  = val.slice(tok.end);
   textI.value = before + '@' + name + ' ' + after;
   const newPos = (before + '@' + name + ' ').length;
   textI.setSelectionRange(newPos, newPos);
-  hideMentionBox();
-  textI.focus();
+  hideMentionBox(); textI.focus();
 }
-
 function moveActiveMention(step){
   const buttons = [...mentionList.querySelectorAll('.mention-item')];
   if (!buttons.length) return;
@@ -372,24 +461,14 @@ function moveActiveMention(step){
 }
 function applyActiveMention(){
   const btn = mentionList.querySelector('.mention-item.active');
-  if (btn) {
-    const name = btn.textContent.replace(/^@/, '');
-    applyMention(name);
-  }
+  if (btn) applyMention(btn.textContent.replace(/^@/, ''));
 }
-
-// 入力で候補更新
 textI.addEventListener('input', () => {
   const tok = findMentionToken();
-  if(!tok){
-    hideMentionBox();
-    return;
-  }
+  if(!tok){ hideMentionBox(); return; }
   const cand = MEMBERS.filter(n => n.startsWith(tok.prefix || ''));
   showMentionBox(cand);
 });
-
-// 入力欄外クリックで候補を閉じる
 document.addEventListener('click', (e) => {
   if (e.target === textI || e.target === mentionBox || mentionBox.contains(e.target)) return;
   hideMentionBox();
