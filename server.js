@@ -9,22 +9,22 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// --- 固定メンバー（プルダウンと一致） ---
+// 固定メンバー（フロントの <select> と一致）
 const ALLOWED_NAMES = ['なおき', 'りさ', 'さな', 'りと'];
 
-// --- 静的配信とルート/ヘルスチェック ---
+// 静的配信 & ルート/ヘルス
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 app.get('/', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
-// --- DB 接続 ---
+// DB接続（DATABASE_URLが無い環境でも落ちないようにtry/catch）
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,         // Render の Environment に設定
+  connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// --- 起動時にテーブル準備（失敗してもプロセスは落とさない） ---
+// 起動時：テーブル作成（失敗してもプロセスは落とさない）
 (async () => {
   try {
     await pool.query(`
@@ -41,9 +41,9 @@ const pool = new Pool({
   }
 })();
 
-// --- Socket.IO ---
+// Socket.IO
 io.on('connection', async (socket) => {
-  // 履歴：最新50件 → 古い→新しい（ASC）で配信（フロントは append で“最新は下”）
+  // 履歴：最新50件 → 古→新（ASC）で送る（フロントは append で「最新は下」）
   try {
     const { rows } = await pool.query(`
       SELECT id,name,text,created_at FROM (
@@ -59,7 +59,7 @@ io.on('connection', async (socket) => {
     console.error('❌ fetch history error:', e);
   }
 
-  // 参加（固定メンバー以外は guest 扱い）
+  // 参加（許可名のみ／不正は guest）
   socket.on('join', (name) => {
     const n = (name || '').toString().trim();
     if (!ALLOWED_NAMES.includes(n)) {
@@ -71,7 +71,7 @@ io.on('connection', async (socket) => {
     socket.broadcast.emit('sys', `${socket.data.name} が参加しました`);
   });
 
-  // メッセージ保存 → id/created_at 付きで配信
+  // メッセージ保存 & 配信（例外は握りつぶしてサーバは落とさない）
   socket.on('msg', async (text) => {
     const name = socket.data.name || 'guest';
     const safe = (text ?? '').toString().slice(0, 500);
@@ -90,14 +90,14 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // 履歴削除（権限 + 任意トークン + 例外ハンドリング）
+  // 履歴削除（名前権限 + 任意トークン + 例外ハンドリング）
   socket.on('clear', async (payload = {}) => {
     try {
-      // 権限：ここでは「なおき」だけに例示（必要に応じて増減）
+      // 例：なおき だけ削除可（必要なら増やしてください）
       const allowedClear = ['なおき'];
       const okName = allowedClear.includes(socket.data?.name);
 
-      // 二段チェック：管理トークン（Render/Environment に ADMIN_TOKEN を設定）
+      // 二段チェック：管理トークン（Render/Environment に ADMIN_TOKEN を設定している場合のみ有効）
       const adminToken = process.env.ADMIN_TOKEN || '';
       const okToken = adminToken ? (payload.token === adminToken) : true;
 
@@ -119,15 +119,11 @@ io.on('connection', async (socket) => {
   });
 });
 
-// --- 開発中の事故再起動ループを抑止（保険） ---
-process.on('unhandledRejection', (err) => {
-  console.error('unhandledRejection:', err);
-});
-process.on('uncaughtException', (err) => {
-  console.error('uncaughtException:', err);
-});
+// 開発中の再起動ループ抑止（保険）
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
 
-// --- 起動 ---
+// 起動
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 server.listen(PORT, HOST, () => {
