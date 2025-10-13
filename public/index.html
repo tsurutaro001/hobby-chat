@@ -33,8 +33,8 @@ header h1{ font-size:16px; margin:0 }
   border-top:1px solid #e5e5e5; background:#fff; z-index:10;
   box-shadow:0 -2px 8px rgba(0,0,0,.04);
 }
-input,button{ font-size:16px }
-#name{ width:30%; min-width:120px }
+input,button,select{ font-size:16px }
+#nameSel{ width:30%; min-width:160px }
 #text{ flex:1; min-width:0 }
 #send{ padding:8px 12px }
 
@@ -47,7 +47,7 @@ input,button{ font-size:16px }
 .time{ font-size:11px; color:#666; margin-left:auto; opacity:.9; }
 .sys{ color:#666; font-size:12px; margin:8px 0 }
 
-@media (max-width:480px){ #name{ width:40% } #send{ padding:8px } }
+@media (max-width:480px){ #nameSel{ width:45% } #send{ padding:8px } }
 </style>
 
 <header>
@@ -61,27 +61,45 @@ input,button{ font-size:16px }
 <div id="log"></div>
 
 <div id="bar">
-  <input id="name" placeholder="ニックネーム">
+  <!-- 固定メンバーのプルダウン -->
+  <select id="nameSel" title="メンバーを選択">
+    <option value="">（メンバーを選択）</option>
+    <option value="なおき">なおき</option>
+    <option value="りさ">りさ</option>
+    <option value="さな">さな</option>
+    <option value="りと">りと</option>
+  </select>
   <input id="text" placeholder="メッセージを入力">
   <button id="send">送信</button>
 </div>
 
 <script src="/socket.io/socket.io.js" crossorigin="anonymous"></script>
 <script>
-// --- 初期参照
 const socket = io();
 const log    = document.getElementById('log');
-const nameI  = document.getElementById('name');
+const nameSel= document.getElementById('nameSel');
 const textI  = document.getElementById('text');
 const sendB  = document.getElementById('send');
 const notifB = document.getElementById('notifBtn');
 const clearB = document.getElementById('clearBtn');
 
-// ニックネーム保存
-nameI.value = localStorage.getItem('nickname') || '';
-nameI.addEventListener('input', () => localStorage.setItem('nickname', nameI.value.trim()));
+// --- ユーティリティ（最新は“下”運用） ---
+function isNearBottom(elem, threshold = 40) {
+  return elem.scrollTop + elem.clientHeight >= elem.scrollHeight - threshold;
+}
+function scrollToBottom(elem) { elem.scrollTop = elem.scrollHeight; }
 
-// 相対時刻表示
+// --- ニックネーム保存＆自動join ---
+nameSel.value = localStorage.getItem('nickname') || '';
+if (nameSel.value) socket.emit('join', nameSel.value);
+nameSel.addEventListener('change', () => {
+  localStorage.setItem('nickname', nameSel.value);
+  if (nameSel.value) socket.emit('join', nameSel.value);
+});
+
+function isMe(name) { return name === (nameSel.value || ''); }
+
+// --- 相対時刻 ---
 function relativeTime(dateStr){
   const now = new Date();
   const d = new Date(dateStr);
@@ -94,12 +112,12 @@ function relativeTime(dateStr){
   return d.toLocaleDateString();
 }
 
-// 日付セパレータ（最新が上＝prepend運用）
-let topDateKey = null;
-function ensureSeparatorFor(dateStr){
+// --- 日付セパレータ（append運用：新しい日になったら区切りを“下”に挿入） ---
+let lastDateKey = null;
+function ensureSeparatorForAppend(dateStr){
   const d = new Date(dateStr);
   const dateKey = d.toISOString().split('T')[0];
-  if (topDateKey === dateKey) return;
+  if (lastDateKey === dateKey) return;
 
   const labelDate = new Date(dateKey);
   const today = new Date();
@@ -109,39 +127,54 @@ function ensureSeparatorFor(dateStr){
   const sep = document.createElement('div');
   sep.className = 'date-separator';
   sep.textContent = label;
-  log.prepend(sep); // さらに上に配置
-  topDateKey = dateKey;
+  log.append(sep);
+  lastDateKey = dateKey;
 }
 
-// 通知
+// --- 通知ON/OFF（アプリ内トグル + ブラウザ権限） ---
+let notifEnabled = JSON.parse(localStorage.getItem('notifEnabled') ?? 'true'); // 既定ON
 function updateNotifButton(){
-  notifB.textContent = (Notification?.permission === 'granted') ? '🔔 通知ON' : '🔕 通知OFF';
+  const perm = Notification?.permission;
+  const label = (perm === 'granted' && notifEnabled) ? '🔔 通知ON' : '🔕 通知OFF';
+  notifB.textContent = label;
 }
-notifB.onclick = async ()=>{
-  if(!('Notification' in window)) return alert('通知に非対応です');
-  if(Notification.permission !== 'granted') await Notification.requestPermission();
+notifB.onclick = async () => {
+  if (!('Notification' in window)) return alert('このブラウザは通知に対応していません');
+  const perm = Notification.permission;
+  if (perm !== 'granted') {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') { updateNotifButton(); return; }
+    notifEnabled = true;
+  } else {
+    notifEnabled = !notifEnabled;
+  }
+  localStorage.setItem('notifEnabled', JSON.stringify(notifEnabled));
   updateNotifButton();
 };
 updateNotifButton();
 
 function maybeNotify({name, text}){
-  if(name === nameI.value.trim()) return;
-  if(document.hidden && Notification?.permission === 'granted'){
-    new Notification(`${name}`, { body: text, tag: 'hobby-chat' });
-    if(navigator.vibrate) navigator.vibrate(30);
-  }
+  if (isMe(name)) return;
+  if (!notifEnabled || Notification?.permission !== 'granted') return;
+  const notInFront = document.hidden || !document.hasFocus();
+  if (!notInFront) return;
+  new Notification(`${name}`, { body: text, tag: 'hobby-chat' });
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
-// 描画＆重複対策（id優先キー）
+// --- 重複防止（id優先キー） ---
 const seen = new Set();
 const keyOf = (m) => m.id ? `id:${m.id}` : `${m.name}:${m.text}:${m.created_at || ''}`;
 
+// --- 描画（最新は下：append） ---
 function addMsg(m, me=false){
   const k = keyOf(m);
   if (seen.has(k)) return;
   seen.add(k);
 
-  // 先にメッセージ
+  // 日付が変わったらセパレータを“先に”挿入（その下にメッセージが並ぶ）
+  ensureSeparatorForAppend(m.created_at);
+
   const wrap = document.createElement('div');
   wrap.className = 'bubble' + (me ? ' me' : '');
   const body = document.createElement('div');
@@ -152,52 +185,53 @@ function addMsg(m, me=false){
   time.textContent = relativeTime(m.created_at);
   wrap.append(body, time);
   log.append(wrap);
-
-  // さらに上にセパレータ
-  ensureSeparatorFor(m.created_at);
 }
 
-// システムメッセージ
+// --- システムメッセージ ---
 function addSys(t){
   const p = document.createElement('div');
   p.className = 'sys';
   p.textContent = t;
-  log.prepend(p);
+  log.append(p);
 }
 
-// ソケット
-socket.on('connect', () => { log.replaceChildren(); seen.clear(); topDateKey = null; });
+// --- 受信：下付近にいる時だけオートスクロール ---
+socket.on('connect', () => { log.replaceChildren(); seen.clear(); lastDateKey = null; });
 socket.on('sys', addSys);
 socket.on('msg', (m) => {
-  const me = (m.name === nameI.value.trim());
+  const auto = isNearBottom(log);
+  const me = isMe(m.name);
   addMsg(m, me);
+  if (auto) scrollToBottom(log);
   maybeNotify(m);
 });
 
-// 送信（サーバ戻りのみ描画＝重複防止）
-function joinIfNeeded(){ const n = nameI.value.trim(); if(n) socket.emit('join', n); }
+// --- 送信（サーバ戻りのみ描画＝重複防止） ---
+function joinIfNeeded(){ if (nameSel.value) socket.emit('join', nameSel.value); }
 sendB.onclick = () => {
+  if (!nameSel.value) return alert('メンバーを選択してください');
   joinIfNeeded();
   const t = textI.value.trim();
   if(!t) return;
+  const auto = isNearBottom(log);
   socket.emit('msg', t);
   textI.value = '';
+  if (auto) scrollToBottom(log);
 };
 textI.addEventListener('keydown', e => { if(e.key==='Enter') sendB.click(); });
-
-// 入力欄の隠れ対策
 textI.addEventListener('focus', () => setTimeout(() => textI.scrollIntoView({block:'nearest'}), 50));
 
-// 履歴削除ボタン
+// --- 履歴削除（管理トークンの入力もサポート） ---
 clearB.onclick = () => {
-  if (confirm('本当に全履歴を削除しますか？（取り消せません）')) {
-    socket.emit('clear');
-  }
+  if (!nameSel.value) return alert('メンバーを選択してください');
+  if (!confirm('本当に全履歴を削除しますか？（取り消せません）')) return;
+  const token = prompt('管理トークン（任意。設定していない場合は空でOK）');
+  socket.emit('clear', { token: token || '' });
 };
 socket.on('cleared', () => {
   log.replaceChildren();
   seen.clear();
-  topDateKey = null;
+  lastDateKey = null;
   alert('チャット履歴を削除しました');
 });
 </script>
