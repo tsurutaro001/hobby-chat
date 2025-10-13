@@ -151,7 +151,7 @@ function addMsg(m, me=false){
   time.className = 'time';
   time.textContent = relativeTime(m.created_at);
   wrap.append(body, time);
-  log.append(wrap);
+  log.prepend(wrap);
 
   // さらに上にセパレータ
   ensureSeparatorFor(m.created_at);

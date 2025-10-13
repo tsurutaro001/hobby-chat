@@ -56,12 +56,6 @@ io.on('connection', async (socket) => {
     console.error('❌ fetch history error:', e);
   }
 
-  // 履歴受信時も常に最下部へスクロール
-  socket.on('msg', ({name, text}) => {
-    addMsg(name, text, name === nameI.value.trim());
-    log.scrollTop = log.scrollHeight;
-  });
-
   socket.on('join', (name) => {
     socket.data.name = (name || 'guest').toString().trim().slice(0,30) || 'guest';
     socket.broadcast.emit('sys', `${socket.data.name} が参加しました`);
@@ -85,16 +79,27 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // 履歴削除（権限チェックあり）
+  // 履歴削除（簡易版：誰でも実行可）※本番は権限チェック推奨
+  socket.on('clear', async () => {
+    try {
+      await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
+      io.emit('cleared');
+      console.log('🧹 history cleared');
+    } catch (e) {
+      console.error('❌ clear error:', e);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    if (socket.data.name) io.emit('sys', `${socket.data.name} が退出しました`);
+  });
+
+  // 権限管理 *追加
   socket.on('clear', async () => {
     const allowed = ['admin', 'naoki']; // 許可ニックネーム
     if (!allowed.includes(socket.data.name)) return; // 権限なしは無視
     await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
     io.emit('cleared');
-  });
-
-  socket.on('disconnect', () => {
-    if (socket.data.name) io.emit('sys', `${socket.data.name} が退出しました`);
   });
 });
 
