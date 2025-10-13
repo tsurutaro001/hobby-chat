@@ -24,7 +24,7 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// 起動時：テーブル作成＆列追加（写真／既読）
+// 起動時：テーブル作成＆列追加
 (async () => {
   try {
     await pool.query(`
@@ -43,7 +43,6 @@ const pool = new Pool({
         last_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
       );
     `);
-    // 既存環境で列が無い場合に備えて（冪等）
     await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_base64 TEXT;`);
     await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_mime TEXT;`);
     console.log('✅ DB ready');
@@ -52,7 +51,30 @@ const pool = new Pool({
   }
 })();
 
-// 安全ヘルパー
+// 画像クリーニング（3日超の画像データを削除）
+async function cleanupOldImages() {
+  try {
+    const r = await pool.query(`
+      WITH old AS (
+        SELECT id FROM messages
+        WHERE image_base64 IS NOT NULL
+          AND created_at < NOW() - INTERVAL '3 days'
+      )
+      UPDATE messages m
+         SET image_base64 = NULL, image_mime = NULL
+      FROM old
+      WHERE m.id = old.id;
+    `);
+    console.log('🧼 image cleanup done');
+  } catch (e) {
+    console.error('❌ image cleanup error:', e);
+  }
+}
+// 起動時＋1時間ごとに実行
+cleanupOldImages();
+setInterval(cleanupOldImages, 60 * 60 * 1000);
+
+// ヘルパ
 const allowedName = (n) => MEMBERS.includes((n || '').toString().trim());
 const clamp = (s, n) => (s ?? '').toString().slice(0, n);
 
@@ -69,7 +91,6 @@ io.on('connection', async (socket) => {
       ) t ORDER BY id ASC;
     `);
     rows.forEach(row => socket.emit('msg', row));
-    // 既読の初期値も配信
     const reads = await pool.query(`SELECT name,last_message_id FROM last_reads;`);
     socket.emit('reads_bulk', reads.rows);
     console.log(`ℹ️ history rows sent: ${rows.length}, reads sent: ${reads.rowCount}`);
@@ -100,27 +121,21 @@ io.on('connection', async (socket) => {
          RETURNING id,name,text,created_at,image_base64,image_mime`,
         [name, safe]
       );
-      const msg = r.rows[0];
-      io.emit('msg', msg);
-      console.log('📝 inserted text:', msg.id, name, safe.slice(0, 30));
+      io.emit('msg', r.rows[0]);
     } catch (e) {
       console.error('❌ insert text error:', e);
       socket.emit('sys', 'メッセージ保存に失敗しました');
     }
   });
 
-  // 画像送信（dataURLを受け取ってDBに保存：サイズ上限 ~700KB）
+  // 画像送信（~700KBまでのPNG/JPEG/GIF/WebP）
   socket.on('upload_image', async (payload = {}) => {
     try {
       const name = socket.data.name || 'guest';
       const dataURL = String(payload.dataURL || '');
-      // dataURL検証
       const m = dataURL.match(/^data:(image\/(png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
       if (!m) return socket.emit('sys', '画像は PNG/JPEG/GIF/WebP のみ対応です');
-      // サイズ上限（Base64長でざっくりチェック）
-      if (dataURL.length > 950_000) {
-        return socket.emit('sys', '画像が大きすぎます（~700KBまで）');
-      }
+      if (dataURL.length > 950_000) return socket.emit('sys', '画像が大きすぎます（~700KBまで）');
       const mime = m[1];
 
       const r = await pool.query(
@@ -129,29 +144,28 @@ io.on('connection', async (socket) => {
          RETURNING id,name,text,created_at,image_base64,image_mime`,
         [name, dataURL, mime]
       );
-      const msg = r.rows[0];
-      io.emit('msg', msg);
-      console.log('🖼️ inserted image:', msg.id, name, mime);
+      io.emit('msg', r.rows[0]);
     } catch (e) {
       console.error('❌ upload_image error:', e);
       socket.emit('sys', '画像の保存に失敗しました');
     }
   });
 
-  // 既読更新（クライアントから「ここまで読んだ」）
+  // 既読更新（NULL対策: COALESCE）
   socket.on('read_upto', async (lastId) => {
     try {
       const name = socket.data?.name;
-      if (!allowedName(name)) return; // guest などはスキップ
+      if (!allowedName(name)) return;
       const id = Number(lastId) || 0;
-      // 進行方向（後退しない）
       await pool.query(`
         INSERT INTO last_reads(name,last_message_id)
         VALUES($1,$2)
         ON CONFLICT (name) DO UPDATE
-        SET last_message_id = GREATEST(last_reads.last_message_id, EXCLUDED.last_message_id);
+        SET last_message_id = GREATEST(
+          COALESCE(last_reads.last_message_id, 0),
+          EXCLUDED.last_message_id
+        );
       `, [name, id]);
-      // 全員の最新値をブロードキャスト（軽量）
       io.emit('reads', { name, last_message_id: id });
     } catch (e) {
       console.error('❌ read_upto error:', e);
@@ -161,7 +175,7 @@ io.on('connection', async (socket) => {
   // 履歴削除（名前権限 + 任意トークン）
   socket.on('clear', async (payload = {}) => {
     try {
-      const allowedClear = ['なおき']; // 必要に応じて増やす
+      const allowedClear = ['なおき'];
       const okName = allowedClear.includes(socket.data?.name);
       const adminToken = process.env.ADMIN_TOKEN || '';
       const okToken = adminToken ? (payload.token === adminToken) : true;
