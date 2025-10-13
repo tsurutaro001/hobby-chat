@@ -79,27 +79,16 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // 履歴削除（簡易版：誰でも実行可）※本番は権限チェック推奨
+  // 履歴削除（権限チェックあり）
   socket.on('clear', async () => {
-    try {
-      await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
-      io.emit('cleared');
-      console.log('🧹 history cleared');
-    } catch (e) {
-      console.error('❌ clear error:', e);
-    }
+    const allowed = ['admin', 'naoki'];
+    if (!allowed.includes(socket.data.name)) return;
+    await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
+    io.emit('cleared');
   });
 
   socket.on('disconnect', () => {
     if (socket.data.name) io.emit('sys', `${socket.data.name} が退出しました`);
-  });
-
-  // 権限管理 *追加
-  socket.on('clear', async () => {
-    const allowed = ['admin', 'naoki']; // 許可ニックネーム
-    if (!allowed.includes(socket.data.name)) return; // 権限なしは無視
-    await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
-    io.emit('cleared');
   });
 });
 
