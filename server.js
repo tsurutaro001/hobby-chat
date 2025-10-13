@@ -79,12 +79,39 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // 履歴削除（権限チェックあり）
-  socket.on('clear', async () => {
-    const allowed = ['admin', 'naoki'];
-    if (!allowed.includes(socket.data.name)) return;
-    await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
-    io.emit('cleared');
+  // 履歴削除（権限チェック + 例外ハンドリング + 任意トークン）
+  socket.on('clear', async (payload = {}) => {
+    try {
+      // 1) ニックネーム制限（任意で変更）
+      const allowed = ['admin', 'naoki'];
+      const okName = allowed.includes(socket.data?.name);
+
+      // 2) 管理トークン（二段チェック／任意）
+      const adminToken = process.env.ADMIN_TOKEN || '';
+      const okToken = adminToken ? (payload.token === adminToken) : true;
+
+      if (!okName || !okToken) {
+        // 権限なし：静かに無視（または socket.emit('sys', '権限がありません');）
+        return;
+      }
+
+      // 3) DB接続が無い/死んでいる場合のガード
+      if (!pool || typeof pool.query !== 'function') {
+        console.error('clear: pool is not ready');
+        socket.emit('sys', 'DB未接続のため削除できません');
+        return;
+      }
+
+      // 4) 実行（トランザクションは任意）
+      await pool.query('TRUNCATE TABLE messages RESTART IDENTITY;');
+      io.emit('cleared');
+      console.log('🧹 history cleared by', socket.data.name);
+
+    } catch (e) {
+      console.error('❌ clear error:', e);
+      // 失敗時でもプロセスを落とさない
+      socket.emit('sys', '削除に失敗しました（サーバログ参照）');
+    }
   });
 
   socket.on('disconnect', () => {
