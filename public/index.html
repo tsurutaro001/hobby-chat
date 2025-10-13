@@ -28,24 +28,32 @@ header h1{ font-size:16px; margin:0; cursor:pointer; user-select:none; }
   text-align:center; margin:16px 0; font-size:13px; color:#666;
 }
 
+/* ==== 2段コンソール ==== */
 #bar{
   position:sticky; bottom:0;
-  display:grid; grid-template-columns: minmax(150px, 240px) 1fr auto auto;
+  display:grid;
+  grid-template-columns: minmax(140px, 240px) auto auto; /* 1行目 */
+  grid-template-rows: auto auto; /* 2行構成 */
   gap:8px; padding:8px 8px calc(8px + var(--safe-bottom));
   border-top:1px solid #e5e5e5; background:#fff; z-index:10;
   box-shadow:0 -2px 8px rgba(0,0,0,.04);
-  align-items: center;
+  align-items:center;
 }
 select, button, textarea{ font-size:16px }
-#nameSel{ width:100%; min-width:140px }
+
+/* 1行目 */
+#nameSel{ grid-column: 1 / 2; width:100% }
+#photoBtn{ grid-column: 2 / 3; padding:8px 10px; border:1px solid #ddd; border-radius:6px; background:#fff; }
+#send{ grid-column: 3 / 4; padding:8px 12px }
+
+/* 2行目（テキストエリアは横幅いっぱい） */
 #text{
-  width:100%; min-height:2.8em; max-height:9em; resize: none;
-  line-height:1.4; padding:8px 10px;
+  grid-column: 1 / 4; width:100%;
+  min-height:3.2em; max-height:11em; resize: none;
+  line-height:1.5; padding:10px 12px;
   border:1px solid #ddd; border-radius:8px;
 }
-#send{ padding:8px 12px }
-#photo{ display:none }
-#photoBtn{ padding:8px 10px; border:1px solid #ddd; border-radius:6px; background:#fff; }
+#photo{ display:none } /* 隠しファイル入力 */
 
 .bubble{
   margin:6px 0; padding:8px 10px; border-radius:10px; background:#f1f3f5; max-width:92%;
@@ -65,7 +73,7 @@ mark { background: #ffe56a; padding: 0 2px; border-radius: 2px; }
 /* メンション候補 */
 .mention-box{
   position:absolute; left: 8px; right: 8px;
-  bottom: calc(64px + var(--safe-bottom)); /* 入力域が高くなったので少し上に */
+  bottom: calc(78px + var(--safe-bottom)); /* 入力域が高くなったので上げる */
   display:none; background:#fff; border:1px solid #e5e5e5; border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.08); padding:6px; z-index: 20;
 }
@@ -83,7 +91,7 @@ img.chat-photo{
 }
 
 @media (max-width:480px){
-  #bar{ grid-template-columns: minmax(120px, 40%) 1fr auto auto; }
+  #bar{ grid-template-columns: minmax(120px, 1fr) auto auto; }
 }
 </style>
 
@@ -98,7 +106,7 @@ img.chat-photo{
 <div id="log"></div>
 
 <div id="bar">
-  <!-- 固定メンバー -->
+  <!-- 1行目 -->
   <select id="nameSel" title="メンバーを選択">
     <option value="">（メンバーを選択）</option>
     <option value="なおき">なおき</option>
@@ -106,14 +114,12 @@ img.chat-photo{
     <option value="さな">さな</option>
     <option value="りと">りと</option>
   </select>
-
-  <!-- 2行以上の入力欄（Enter送信 / Shift+Enter改行） -->
-  <textarea id="text" placeholder="メッセージを入力（Enterで送信・Shift+Enterで改行）" rows="2"></textarea>
-
   <button id="photoBtn" title="写真を送る">📷</button>
   <input id="photo" type="file" accept="image/*">
-
   <button id="send">送信</button>
+
+  <!-- 2行目 -->
+  <textarea id="text" placeholder="メッセージを入力（Enterで送信・Shift+Enterで改行）" rows="2"></textarea>
 </div>
 
 <!-- メンション候補 -->
@@ -123,6 +129,7 @@ img.chat-photo{
 <script>
 /* ===== 定数・参照 ===== */
 const MEMBERS = ['なおき', 'りさ', 'さな', 'りと'];
+const MAX_BYTES = 700 * 1024; // 700KB 上限
 const socket  = io();
 const log     = document.getElementById('log');
 const nameSel = document.getElementById('nameSel');
@@ -155,6 +162,11 @@ function escapeHTML(s){
    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+function byteLengthFromDataURL(dataURL){
+  const b64 = dataURL.split(',')[1] || '';
+  // base64 の実効バイト数（概算）
+  return Math.floor((b64.length * 3) / 4);
+}
 
 /* ===== タイトルタップでリロード ===== */
 titleEl.addEventListener('click', () => location.reload());
@@ -167,10 +179,10 @@ nameSel.addEventListener('change', () => {
   if (nameSel.value) socket.emit('join', nameSel.value);
 });
 
-/* ===== 入力欄オートリサイズ（2行～最大9行） ===== */
+/* ===== 入力欄オートリサイズ ===== */
 function autoResize() {
   textI.style.height = 'auto';
-  const h = Math.min(textI.scrollHeight, 9 * 20 + 16); // ざっくり行高×9 + padding
+  const h = Math.min(textI.scrollHeight, 11 * 20 + 16);
   textI.style.height = h + 'px';
 }
 textI.addEventListener('input', autoResize);
@@ -210,7 +222,7 @@ function ensureSeparatorForAppend(dateStr){
 }
 
 /* ===== 通知（未対応ブラウザは無効化） ===== */
-let notifEnabled = JSON.parse(localStorage.getItem('notifEnabled') ?? 'true');
+let notifEnabled = true; try { const saved = localStorage.getItem('notifEnabled'); if (saved!=null) notifEnabled = JSON.parse(saved); } catch {}
 function supportsNotification(){
   return (typeof Notification !== 'undefined') && typeof Notification.requestPermission === 'function';
 }
@@ -255,7 +267,6 @@ function maybeNotify({name, text}){
 /* ===== 既読（自分のメッセージにだけバッジ表示） ===== */
 const lastReads = new Map(); // name -> last_message_id
 function updateReadBadgeFor(messageId, bubbleEl, sender){
-  // 自分が送ったメッセージ以外は既読バッジを表示しない
   if (sender !== nameSel.value) {
     const exist = bubbleEl.querySelector('.read-badge');
     if (exist) exist.remove();
@@ -399,22 +410,89 @@ textI.addEventListener('keydown', (e) => {
   }
 });
 
-/* ===== 画像送信 ===== */
+/* ===== 画像送信（>700KBなら自動圧縮） ===== */
 photoB.onclick = () => photoI.click();
 photoI.onchange = async () => {
   const f = photoI.files?.[0];
   if (!f) return;
-  if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type)) { alert('PNG/JPEG/GIF/WebPのみ対応'); photoI.value=''; return; }
-  if (f.size > 700*1024) { alert('画像は約700KBまでです'); photoI.value=''; return; }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataURL = reader.result;
+  try {
+    const dataURL = await toDataURLWithCompressIfNeeded(f, MAX_BYTES);
     socket.emit('upload_image', { dataURL });
+  } catch (e) {
+    alert(e?.message || '画像の処理に失敗しました');
+  } finally {
     photoI.value = '';
-  };
-  reader.onerror = () => { alert('画像の読み込みに失敗しました'); };
-  reader.readAsDataURL(f);
+  }
 };
+
+/* 圧縮ヘルパ：JPEG/WebPで品質→リサイズの順に下げてMAX_BYTES以下に収める */
+async function toDataURLWithCompressIfNeeded(file, maxBytes){
+  // まずそのまま DataURL を作る
+  const direct = await fileToDataURL(file);
+  if (byteLengthFromDataURL(direct) <= maxBytes) return direct;
+
+  // 画像を読み込んで Canvas へ
+  const {img, w, h} = await loadImageFromFile(file);
+
+  // PNG等でも軽量化のため JPEG を優先
+  const preferred = 'image/jpeg';
+  // 品質を段階的に下げる（まずは寸法はそのまま）
+  for (let q = 0.92; q >= 0.5; q -= 0.08) {
+    const url = drawToDataURL(img, w, h, preferred, q);
+    if (byteLengthFromDataURL(url) <= maxBytes) return url;
+  }
+  // まだ大きければ寸法を少しずつ縮小（最小辺 512px まで）＋品質も調整
+  let cw = w, ch = h;
+  while (Math.min(cw, ch) > 512) {
+    cw = Math.round(cw * 0.85);
+    ch = Math.round(ch * 0.85);
+    for (let q = 0.9; q >= 0.5; q -= 0.1) {
+      const url = drawToDataURL(img, cw, ch, preferred, q);
+      if (byteLengthFromDataURL(url) <= maxBytes) return url;
+    }
+  }
+  // 最終手段：最小サイズ＆最低品質
+  return drawToDataURL(img, Math.max(512, Math.round(w*0.5)), Math.max(512, Math.round(h*0.5)), preferred, 0.5);
+}
+
+function fileToDataURL(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('ファイル読み込みに失敗しました'));
+    r.readAsDataURL(file);
+  });
+}
+
+function loadImageFromFile(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({img, w: img.naturalWidth, h: img.naturalHeight});
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('画像の読み込みに失敗しました'));
+    };
+    img.src = url;
+  });
+}
+
+function drawToDataURL(img, w, h, mime, quality){
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  // アンチエイリアスを強めに
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
+  let url;
+  try { url = c.toDataURL(mime, quality); }
+  catch { url = c.toDataURL(); } // フォールバック
+  return url;
+}
 
 /* ===== 既読：最下部にいる時に更新 ===== */
 const throttle = (fn, ms=400) => { let t=0; return (...a)=>{const n=Date.now(); if(n-t>ms){t=n; fn(...a);} }; };
