@@ -1,0 +1,62 @@
+name: SBOM & Vulnerability Scan (Syft + Grype)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # complianceフォルダへの自動コミット用
+
+jobs:
+  sbom_scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ① ソース取得
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ② Nodeセットアップ（依存関係解析のため）
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ③ SyftでSBOM生成
+      - name: Generate SBOM (Syft)
+        uses: anchore/syft-action@v1
+        with:
+          image: dir:.
+          output: sbom.cdx.json
+          format: cyclonedx-json
+
+      # ④ Grypeで脆弱性スキャン
+      - name: Scan vulnerabilities (Grype)
+        uses: anchore/grype-action@v1
+        with:
+          sbom: sbom.cdx.json
+          output: table
+        continue-on-error: true
+
+      # ⑤ 結果をcomplianceフォルダに保存
+      - name: Save results
+        run: |
+          mkdir -p compliance
+          mv sbom.cdx.json compliance/
+          mv grype-report.txt compliance/ || true
+          echo "Scan date: $(date -u)" > compliance/summary.txt
+          echo "Commit: $GITHUB_SHA" >> compliance/summary.txt
+
+      # ⑥ 自動コミット
+      - name: Commit and push compliance files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add compliance/
+          git commit -m "chore: update SBOM and scan results [ci skip]" || echo "No changes"
+          git push
