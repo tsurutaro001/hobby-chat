@@ -26,23 +26,23 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      # ✅ SyftでSBOM生成（公式：anchore/sbom-action）
-      - name: Generate SBOM (CycloneDX)
-        uses: anchore/sbom-action@v0
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: sbom.cdx.json
+# SBOM生成（Syft JSON）
+- name: Generate SBOM (Syft JSON)
+  uses: anchore/sbom-action@v0
+  with:
+    path: .
+    format: syft-json
+    output-file: sbom.syft.json
 
-      # ✅ Grypeでスキャン（公式：anchore/scan-action）
-      - name: Scan vulnerabilities (Grype)
-        uses: anchore/scan-action@v3
-        with:
-          sbom: sbom.cdx.json
-          fail-build: false   # High以上で失敗させたい時は true とし severity-cutoff 併用
-          severity-cutoff: high
-          output-format: table
-        continue-on-error: true
+# Grypeでスキャン（Syft JSONを入力）
+- name: Scan vulnerabilities (Grype)
+  uses: anchore/scan-action@v3
+  with:
+    sbom: sbom.syft.json
+    fail-build: false
+    severity-cutoff: high
+    output-format: table
+
 
       - name: Save results to /compliance
         run: |
