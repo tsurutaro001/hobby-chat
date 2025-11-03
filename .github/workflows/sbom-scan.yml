@@ -1,4 +1,4 @@
-name: SBOM & Vulnerability Scan (Syft + Grype JSON version)
+name: SBOM & Vulnerability Scan (Syft + Grype Direct Scan)
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # /complianceフォルダへ自動コミットするために必要
+  contents: write   # complianceフォルダへの自動コミット用
 
 jobs:
   sbom_scan:
@@ -15,11 +15,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # --- 1️⃣ ソースコードを取得 ---
+      # --- 1️⃣ ソースを取得 ---
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- 2️⃣ Node.jsをセットアップ ---
+      # --- 2️⃣ Node.jsセットアップ ---
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -28,37 +28,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # --- 3️⃣ SyftでSBOM生成 (Syft JSON形式) ---
-      # anchore/sbom-action は Syft を内蔵している公式アクション
-      - name: Generate SBOM (Syft JSON)
+      # --- 3️⃣ SyftでSBOM生成（監査証跡用） ---
+      - name: Generate SBOM (CycloneDX JSON)
         uses: anchore/sbom-action@v0
         with:
           path: .
-          format: syft-json
-          output-file: sbom.syft.json
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
 
-      # --- 4️⃣ Grypeで脆弱性スキャン ---
-      # anchore/scan-action は Grype を内蔵している公式アクション
-      - name: Scan vulnerabilities (Grype)
+      # --- 4️⃣ Grypeで脆弱性スキャン（直接ディレクトリ指定） ---
+      # SBOMを介さず、ローカルパス . を直接スキャン
+      - name: Scan vulnerabilities (Grype direct)
         uses: anchore/scan-action@v3
         with:
-          sbom: sbom.syft.json       # ← Syft JSONを入力
-          fail-build: false          # ← trueにするとHigh以上でCI停止
+          path: .
+          fail-build: false
           severity-cutoff: high
           output-format: table
-        continue-on-error: true       # ← スキャン結果を記録しつつ処理続行
+        continue-on-error: true
 
-      # --- 5️⃣ complianceフォルダに結果を保存 ---
-      - name: Save compliance results
+      # --- 5️⃣ complianceフォルダへ成果物保存 ---
+      - name: Save results
         run: |
           mkdir -p compliance
-          mv sbom.syft.json compliance/
+          mv sbom.cdx.json compliance/
           echo "Scan executed at: $(date -u)" > compliance/summary.txt
           echo "Commit: $GITHUB_SHA" >> compliance/summary.txt
           echo "Executed by: ${{ github.actor }}" >> compliance/summary.txt
 
-      # --- 6️⃣ GitHubへ自動コミット ---
-      - name: Commit & Push SBOM/Scan results
+      # --- 6️⃣ GitHubに自動コミット ---
+      - name: Commit and push compliance results
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
