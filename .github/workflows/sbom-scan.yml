@@ -1,4 +1,4 @@
-name: SBOM & Vulnerability Scan (Syft + Grype)
+name: SBOM & Vulnerability Scan (Syft + Grype JSON version)
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # /compliance へ自動コミット用
+  contents: write   # /complianceフォルダへ自動コミットするために必要
 
 jobs:
   sbom_scan:
@@ -15,47 +15,53 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout
+      # --- 1️⃣ ソースコードを取得 ---
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --- 2️⃣ Node.jsをセットアップ ---
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
-# SBOM生成（Syft JSON）
-- name: Generate SBOM (Syft JSON)
-  uses: anchore/sbom-action@v0
-  with:
-    path: .
-    format: syft-json
-    output-file: sbom.syft.json
+      # --- 3️⃣ SyftでSBOM生成 (Syft JSON形式) ---
+      # anchore/sbom-action は Syft を内蔵している公式アクション
+      - name: Generate SBOM (Syft JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: syft-json
+          output-file: sbom.syft.json
 
-# Grypeでスキャン（Syft JSONを入力）
-- name: Scan vulnerabilities (Grype)
-  uses: anchore/scan-action@v3
-  with:
-    sbom: sbom.syft.json
-    fail-build: false
-    severity-cutoff: high
-    output-format: table
+      # --- 4️⃣ Grypeで脆弱性スキャン ---
+      # anchore/scan-action は Grype を内蔵している公式アクション
+      - name: Scan vulnerabilities (Grype)
+        uses: anchore/scan-action@v3
+        with:
+          sbom: sbom.syft.json       # ← Syft JSONを入力
+          fail-build: false          # ← trueにするとHigh以上でCI停止
+          severity-cutoff: high
+          output-format: table
+        continue-on-error: true       # ← スキャン結果を記録しつつ処理続行
 
-
-      - name: Save results to /compliance
+      # --- 5️⃣ complianceフォルダに結果を保存 ---
+      - name: Save compliance results
         run: |
           mkdir -p compliance
-          mv sbom.cdx.json compliance/
-          # scan-actionはSARIFやJSONも出力可能だが、tableはログ出力が基本
-          echo "Scan date: $(date -u)" > compliance/summary.txt
+          mv sbom.syft.json compliance/
+          echo "Scan executed at: $(date -u)" > compliance/summary.txt
           echo "Commit: $GITHUB_SHA" >> compliance/summary.txt
+          echo "Executed by: ${{ github.actor }}" >> compliance/summary.txt
 
-      - name: Commit & push
+      # --- 6️⃣ GitHubへ自動コミット ---
+      - name: Commit & Push SBOM/Scan results
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add compliance/
-          git commit -m "chore: update SBOM & scan results [ci skip]" || echo "No changes"
+          git commit -m "chore: update SBOM & vulnerability scan results [ci skip]" || echo "No changes"
           git push
